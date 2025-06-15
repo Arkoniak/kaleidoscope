@@ -1,7 +1,9 @@
 const std = @import("std");
+const testing = std.testing;
 // const print = std.debug.print;
 const String = []const u8;
-const lib = @import("lib.zig");
+const lexer = @import("lexer.zig");
+const ast = @import("ast.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
@@ -12,7 +14,7 @@ pub fn main() !void {
 
     while (true) {
         // Выводим приглашение
-        try stdout.print("Введите текст (или 'quit' для выхода): ", .{});
+        try stdout.print("ready> ", .{});
 
         // Читаем строку из stdin
         if (try stdin.readUntilDelimiterOrEof(&buffer, '\n')) |input| {
@@ -34,4 +36,12 @@ pub fn main() !void {
     }
 
     // print("Hello world, 2 + 3 = {d}\n", .{lib.add(2, 3)});
+}
+
+test "Lexer" {
+    _ = lexer;
+}
+
+test "AST" {
+    _ = ast;
 }
