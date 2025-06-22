@@ -4,6 +4,7 @@ const testing = std.testing;
 const String = []const u8;
 const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
+const parser = @import("parser.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
@@ -44,4 +45,8 @@ test "Lexer" {
 
 test "AST" {
     _ = ast;
+}
+
+test "Parser" {
+    _ = parser;
 }

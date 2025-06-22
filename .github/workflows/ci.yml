@@ -1,0 +1,79 @@
+
+name: CI
+
+on:
+  # Run on push in main branch
+  push:
+    branches: [ main ]
+  # Run on PR to main
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on:  ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: 0.15.0-dev.643+dc6ffc28b # or master
+ 
+    - name: Cache LLVM (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      id: cache-llvm-ubuntu
+      uses: actions/cache@v4
+      with:
+        path: |
+          /usr/lib/llvm-19
+          /usr/include/llvm-19
+          /usr/bin/llvm*
+        key: llvm-19-ubuntu-latest
+    
+    - name: Cache LLVM (macOS)
+      if: matrix.os == 'macos-latest'
+      id: cache-llvm-macos
+      uses: actions/cache@v4
+      with:
+        path: |
+          /usr/local/opt/llvm@19
+          /usr/local/bin/llvm*
+        key: llvm-19-macos-latest
+    
+    - name: Cache LLVM (Windows)
+      if: matrix.os == 'windows-latest'
+      id: cache-llvm-windows
+      uses: actions/cache@v4
+      with:
+        path: |
+          C:\Program Files\LLVM
+        key: llvm-19-windows-latest
+
+    - name: Install LLVM (Ubuntu)
+      if: matrix.os == 'ubuntu-latest' && steps.cache-llvm-ubuntu.outputs.cache-hit != 'true'
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 19
+    
+    - name: Install LLVM (macOS)
+      if: matrix.os == 'macos-latest' && steps.cache-llvm-macos.outputs.cache-hit != 'true'
+      run: |
+        brew install llvm@19
+    
+    - name: Install LLVM (Windows)
+      if: matrix.os == 'windows-latest' && steps.cache-llvm-windows.outputs.cache-hit != 'true'
+      run: |
+        choco install llvm --version=19.1.0
+
+    - name: Build project
+      run: zig build
+
+    - name: Run tests
+      run: zig build test
