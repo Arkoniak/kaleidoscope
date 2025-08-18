@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
 
     exe.linkLibC();
 
-    exe.linkSystemLibrary("LLVM-19"); // Ubuntu
+    exe.linkSystemLibrary("LLVM-20"); // Ubuntu
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
