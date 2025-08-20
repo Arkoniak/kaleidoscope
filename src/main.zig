@@ -1,29 +1,28 @@
 const std = @import("std");
-const testing = std.testing;
-// const print = std.debug.print;
-const String = []const u8;
 const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
-const parser = @import("parser.zig");
+const parser_module = @import("parser.zig");
+const Parser = @import("parser.zig").Parser;
+const testing = std.testing;
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
 
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     var buffer: [4096]u8 = undefined;
 
     while (true) {
-        try stdout.print("ready> ", .{});
+        defer _ = arena.reset(.retain_capacity);
+        try stdout.print("> ", .{});
 
         if (try stdin.readUntilDelimiterOrEof(&buffer, '\n')) |input| {
-            const trimmed = std.mem.trim(u8, input, "\r\n");
-
-            if (std.mem.eql(u8, trimmed, "quit")) {
-                try stdout.print("Good bye\n", .{});
-                break;
-            }
-
-            try stdout.print("{s}\n", .{trimmed});
+            var parser = Parser.create(input, allocator);
+            const expr = try parser.parse() orelse continue;
+            try stdout.print("{}\n", .{expr});
         } else {
             break;
         }
@@ -34,10 +33,10 @@ test "Lexer" {
     _ = lexer;
 }
 
-// test "AST" {
-//     _ = ast;
-// }
-//
-// test "Parser" {
-//     _ = parser;
-// }
+test "AST" {
+    _ = ast;
+}
+
+test "Parser" {
+    _ = parser_module;
+}

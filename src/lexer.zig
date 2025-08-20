@@ -3,7 +3,7 @@ const testing = std.testing;
 
 // The lexer returns tokens [0-255] if it is an unknown character, otherwise one
 // of these for known things.
-const Tag = enum {
+pub const Tag = enum {
     eof,
 
     // commands
@@ -18,7 +18,7 @@ const Tag = enum {
     unknown,
 };
 
-const Token = struct {
+pub const Token = struct {
     s: u16,
     e: u16,
     tag: Tag,
@@ -48,7 +48,7 @@ fn isnewline(c: u8) bool {
     return ((c == '\n') or (c == '\r'));
 }
 
-const Lexer = struct {
+pub const Lexer = struct {
     buf: []const u8,
     i: u16 = 0,
     char: u8 = 0,
@@ -136,7 +136,7 @@ const Lexer = struct {
         return std.mem.eql(u8, self.buf[token.s..token.e], kw);
     }
 
-    fn inspect(self: Self, token: Token) []const u8 {
+    pub fn inspect(self: Self, token: Token) []const u8 {
         return self.buf[token.s..token.e];
     }
 };
