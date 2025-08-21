@@ -8,6 +8,7 @@ pub const Expr = union(enum) {
     Variable: VariableExpr,
     Call: CallExpr,
     BinOp: BinOpExpr,
+    Prototype: PrototypeExpr,
 
     const Self = @This();
     pub fn number(allocator: std.mem.Allocator, value: f64) !*Self {
@@ -16,9 +17,9 @@ pub const Expr = union(enum) {
         return expr;
     }
 
-    pub fn function(allocator: std.mem.Allocator, body: *const Expr) !*Self {
+    pub fn function(allocator: std.mem.Allocator, proto: *const Expr, body: *const Expr) !*Self {
         const expr = try allocator.create(Expr);
-        expr.* = Expr{.Function = FunctionExpr{.body = body}};
+        expr.* = Expr{.Function = FunctionExpr{.proto = proto, .body = body}};
         return expr;
     }
 
@@ -40,6 +41,12 @@ pub const Expr = union(enum) {
         return expr;
     }
 
+    pub fn prototype(allocator: std.mem.Allocator, name: []const u8, args: [][]const u8)!*Self {
+        const expr = try allocator.create(Expr);
+        expr.* = Expr{.Prototype = PrototypeExpr{.name = name, .args = args}};
+        return expr;
+    }
+
     pub fn format(
         self: Self,
         comptime fmt: []const u8,
@@ -47,11 +54,12 @@ pub const Expr = union(enum) {
         writer: anytype,
     ) !void {
         switch(self) {
-            .Function => |func_expr| try func_expr.format(fmt, options, writer),
-            .Number   => |number_expr| try number_expr.format(fmt, options, writer),
-            .Variable => |var_expr| try var_expr.format(fmt, options, writer),
-            .Call     => |call_expr| try call_expr.format(fmt, options, writer),
-            .BinOp    => |binop_expr| try binop_expr.format(fmt, options, writer),
+            .Function  => |func_expr| try func_expr.format(fmt, options, writer),
+            .Number    => |number_expr| try number_expr.format(fmt, options, writer),
+            .Variable  => |var_expr| try var_expr.format(fmt, options, writer),
+            .Call      => |call_expr| try call_expr.format(fmt, options, writer),
+            .BinOp     => |binop_expr| try binop_expr.format(fmt, options, writer),
+            .Prototype => |proto_expr| try proto_expr.format(fmt, options, writer),
         }
     }
 };
@@ -119,6 +127,7 @@ const BinOpExpr = struct {
 };
 
 const FunctionExpr = struct {
+    proto: *const Expr,
     body: *const Expr,
 
     const Self = @This();
@@ -131,7 +140,7 @@ const FunctionExpr = struct {
         _ = fmt;
         _ = options;
 
-        try writer.print("double _lambda() {{\n    ret ", .{});
+        try writer.print("{} {{\n    ret ", .{self.proto});
         try writer.print("{}", .{self.body});
         try writer.print("\n}}", .{});
     }
@@ -165,6 +174,35 @@ const CallExpr = struct {
     }
 };
 
+const PrototypeExpr = struct {
+    name: []const u8,
+    args: [][]const u8,
+
+    const Self = @This();
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}(", .{self.name});
+        var isFirst: bool = true;
+        for (self.args) |arg| {
+            if (isFirst) {
+                isFirst = false;
+            } else {
+                try writer.print(" ", .{});
+            }
+
+            try writer.print("{s}", .{arg});
+        }
+        try writer.print(")", .{});
+    }
+};
+
 test "Simple AST creation" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -173,7 +211,9 @@ test "Simple AST creation" {
     const num = try Expr.number(allocator, 5);
     try testing.expectEqual(num.Number.value, 5);
 
-    const func = try Expr.function(allocator, num);
+    const args = std.ArrayList([]const u8).init(allocator);
+    const proto = try Expr.prototype(allocator, "_lambda", args.items);
+    const func = try Expr.function(allocator, proto, num);
     try testing.expectEqual(func.Function.body.Number.value, 5);
 
     const variable = try Expr.variable(allocator, "foo");
@@ -201,10 +241,36 @@ test "Simple print function usage" {
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
 
+    const args = std.ArrayList([]const u8).init(allocator);
+    const proto = try Expr.prototype(allocator, "_lambda", args.items);
     const num = try Expr.number(allocator, 5);
-    const func = try Expr.function(allocator, num);
+    const func = try Expr.function(allocator, proto, num);
     try writer.print("{}", .{func});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret 5\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "_lambda() {\n    ret 5\n}");
+}
+
+test "Prorotyped function with multiple variables" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    var args = std.ArrayList([]const u8).init(allocator);
+    try args.append("x");
+    try args.append("y");
+
+    const proto = try Expr.prototype(allocator, "_lambda", args.items);
+
+    const lhs = try Expr.variable(allocator, "x");
+    const rhs = try Expr.number(allocator, 5);
+    const op = lexer.Tag.plus;
+
+    const binop = try Expr.binop(allocator, op, lhs, rhs);
+    const func = try Expr.function(allocator, proto, binop);
+    try writer.print("{}", .{func});
+    try testing.expectEqualStrings(stream.getWritten(), "_lambda(x y) {\n    ret (x + 5)\n}");
 }
 
 test "Simple function call usage" {

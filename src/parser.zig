@@ -61,9 +61,11 @@ pub const Parser = struct {
     pub fn parse(self: *Self) !?*ast.Expr {
         var result: ?*ast.Expr = null;
         while (self.token.tag != lexer.Tag.eof) {
-            switch(self.token.tag) {
-                else => result = try self.handleTopLevelExpr(),
-            }
+            result = switch(self.token.tag) {
+                .def => try self.handleDefinition(),
+                .tag_extern => try self.handleExtern(),
+                else => try self.handleTopLevelExpr(),
+            };
         }
 
         return result;
@@ -77,10 +79,30 @@ pub const Parser = struct {
         return expr;
     }
 
+    fn handleDefinition(self: *Self) ParserError!?*ast.Expr {
+        const expr = try self.parseDefinition();
+        if (expr == null) {
+            self.nextToken();
+        }
+
+        return expr;
+    }
+
+    fn handleExtern(self: *Self) ParserError!?*ast.Expr {
+        const expr = try self.parseExternal();
+        if (expr == null) {
+            self.nextToken();
+        }
+
+        return expr;
+    }
+
     /// toplevelexpr ::= expression
     fn parseTopLevelExpr(self: *Self) !?*ast.Expr {
         const expr = try self.parseExpr() orelse return null;
-        return try ast.Expr.function(self.allocator, expr);
+        const args = std.ArrayList([]const u8).init(self.allocator);
+        const proto = try ast.Expr.prototype(self.allocator, "__anon_expr", args.items);
+        return try ast.Expr.function(self.allocator, proto, expr);
     }
 
     /// expression
@@ -187,6 +209,51 @@ pub const Parser = struct {
         const call_expr = try ast.Expr.call(self.allocator, ident, args.items);
         return call_expr;
     }
+
+    /// prototype
+    ///   ::= id '(' id* ')'
+    fn parsePrototypeExpr(self: *Self) ParserError!?*ast.Expr {
+        const fname = self.lexer.inspect(self.token);
+        self.nextToken();
+
+        if (self.token.tag != .lparen) {
+            // TODO: this should return an error
+            return null;
+        }
+        self.nextToken();
+
+        var args = std.ArrayList([]const u8).init(self.allocator);
+        while (self.token.tag == .identifier) {
+            const arg_name = self.lexer.inspect(self.token);
+            try args.append(arg_name);
+            self.nextToken();
+        }
+        if (self.token.tag != .rparen) {
+            // TODO: this should return an error
+            return null;
+        }
+        self.nextToken();
+
+        const proto_expr = try ast.Expr.prototype(self.allocator, fname, args.items);
+        return proto_expr;
+    }
+
+    /// definition ::= 'def' prototype expression
+    fn parseDefinition(self: *Self) ParserError!?*ast.Expr {
+        self.nextToken();
+        const proto_expr = try self.parsePrototypeExpr() orelse return null;
+        const expr = try self.parseExpr() orelse return null;
+        const func_expr = try ast.Expr.function(self.allocator, proto_expr, expr);
+
+        return func_expr;
+    }
+
+    /// external ::= 'extern' prototype
+    fn parseExternal(self: *Self) ParserError!?*ast.Expr {
+        self.nextToken();
+        const proto_expr = try self.parsePrototypeExpr() orelse return null;
+        return proto_expr;
+    }
 };
 
 test "Lexer mutability inside parser" {
@@ -213,7 +280,7 @@ test "Parsing number" {
     const writer = stream.writer();
 
     try writer.print("{}", .{expr});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret 5\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "__anon_expr() {\n    ret 5\n}");
 }
 
 test "Parsing variable" {
@@ -230,7 +297,7 @@ test "Parsing variable" {
     const writer = stream.writer();
 
     try writer.print("{}", .{expr});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "__anon_expr() {\n    ret foo\n}");
 }
 
 test "Parsing expression in parenthesis" {
@@ -247,7 +314,7 @@ test "Parsing expression in parenthesis" {
     const writer = stream.writer();
 
     try writer.print("{}", .{expr});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "__anon_expr() {\n    ret foo\n}");
 }
 
 test "Parsing call" {
@@ -264,7 +331,7 @@ test "Parsing call" {
     const writer = stream.writer();
 
     try writer.print("{}", .{expr});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo(x, y)\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "__anon_expr() {\n    ret foo(x, y)\n}");
 }
 
 test "Parsing call with trailing commas" {
@@ -281,7 +348,7 @@ test "Parsing call with trailing commas" {
     const writer = stream.writer();
 
     try writer.print("{}", .{expr});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo(x, y)\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "__anon_expr() {\n    ret foo(x, y)\n}");
 }
 
 test "Parsing operations with precedence" {
@@ -298,7 +365,7 @@ test "Parsing operations with precedence" {
     const writer = stream.writer();
 
     try writer.print("{}", .{expr});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret (x + y)\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "__anon_expr() {\n    ret (x + y)\n}");
 }
 
 test "Parsing nested operations with precedence" {
@@ -315,5 +382,22 @@ test "Parsing nested operations with precedence" {
     const writer = stream.writer();
 
     try writer.print("{}", .{expr});
-    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret (2 + ((3 + 4) * 5))\n}");
+    try testing.expectEqualStrings(stream.getWritten(), "__anon_expr() {\n    ret (2 + ((3 + 4) * 5))\n}");
+}
+
+test "Parsing function definition" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const program = "def foo(x y) bar(x) + baz(y)";
+
+    var parser = Parser.create(program, allocator);
+    const expr = try parser.parse() orelse unreachable;
+
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writer.print("{}", .{expr});
+    try testing.expectEqualStrings(stream.getWritten(), "foo(x y) {\n    ret (bar(x) + baz(y))\n}");
 }
