@@ -121,13 +121,13 @@ pub const Parser = struct {
     ///   ::= parenexpr
     fn parsePrimary(self: *Self) ParserError!?*ast.Expr {
         switch(self.token.tag) {
-            lexer.Tag.number => {
+            .number => {
                 return try self.parseNumberExpr();
             },
-            lexer.Tag.identifier => {
+            .identifier => {
                 return try self.parseIdentifierExpr();
             },
-            lexer.Tag.lparen => {
+            .lparen => {
                 return try self.parseParenExpr();
             },
             else => return null,
@@ -163,23 +163,23 @@ pub const Parser = struct {
         const ident = self.lexer.inspect(self.token);
         self.nextToken();
 
-        if (self.token.tag != lexer.Tag.lparen) {
+        if (self.token.tag != .lparen) {
             const var_expr = try ast.Expr.variable(self.allocator, ident);
             return var_expr;
         }
         var args = std.ArrayList(*ast.Expr).init(self.allocator);
         while (true) {
             self.nextToken();
-            if (self.token.tag == lexer.Tag.rparen) {
+            if (self.token.tag == .rparen) {
                 break;
             }
             const arg = try self.parseExpr() orelse return null;
             try args.append(arg);
 
-            if (self.token.tag == lexer.Tag.rparen) {
+            if (self.token.tag == .rparen) {
                 break;
             }
-            if (self.token.tag != lexer.Tag.comma) {
+            if (self.token.tag != .comma) {
                 return null;
             }
         }
