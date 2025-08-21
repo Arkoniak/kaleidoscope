@@ -14,15 +14,25 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     var buffer: [4096]u8 = undefined;
+    var input_len: u64 = 0;
 
     while (true) {
         defer _ = arena.reset(.retain_capacity);
         try stdout.print("> ", .{});
 
-        if (try stdin.readUntilDelimiterOrEof(&buffer, '\n')) |input| {
-            var parser = Parser.create(input, allocator);
+        if (try stdin.readUntilDelimiterOrEof(buffer[input_len..], '\n')) |input| {
+            input_len += input.len;
+            if (input_len == 0) {
+                continue;
+            }
+            if (buffer[input_len - 1] == '\\') {
+                buffer[input_len - 1] = '\n';
+                continue;
+            } 
+            var parser = Parser.create(buffer[0..input_len], allocator);
             const expr = try parser.parse() orelse continue;
             try stdout.print("{}\n", .{expr});
+            input_len = 0;
         } else {
             break;
         }
