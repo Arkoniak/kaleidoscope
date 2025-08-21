@@ -1,275 +1,330 @@
 const std = @import("std");
 const testing = std.testing;
-const String = []const u8;
+const lexer = @import("lexer.zig");
 
-const llvm = @cImport({
-    @cInclude("llvm-c/Core.h");
-    @cInclude("llvm-c/Target.h");
-    @cInclude("llvm-c/Types.h");
-});
-
-const Context = llvm.LLVMContextRef;
-const Builder = llvm.LLVMBuilderRef;
-const Module = llvm.LLVMModuleRef;
-const Value = llvm.LLVMValueRef;
-const LLVMType = llvm.LLVMTypeRef;
-
-const KaleidoscopeError = error{ UnknownVariableName, UnknownFunctionName };
-
-const ExprType = enum { PrototypeExpr, FunctionExpr, BinaryExpr, NumberExpr, VariableExpr, CallExpr };
-
-const Expr = struct {
-    etype: ExprType,
-    expr: union(ExprType) { PrototypeExpr: ProtoAST, FunctionExpr: FunctionAST, BinaryExpr: BinaryAST, NumberExpr: NumberAST, VariableExpr: VariableAST, CallExpr: CallAST },
+pub const Expr = union(enum) {
+    Function: FunctionExpr,
+    Number: NumberExpr,
+    Variable: VariableExpr,
+    Call: CallExpr,
+    BinOp: BinOpExpr,
+    Prototype: PrototypeExpr,
 
     const Self = @This();
-
-    pub fn call(name: String, args: []Expr) Self {
-        const callast: CallAST = .{ .name = name, .args = args };
-        return .{ .etype = .CallExpr, .expr = .{ .CallExpr = callast } };
+    pub fn number(allocator: std.mem.Allocator, value: f64) !*Self {
+        const expr = try allocator.create(Expr);
+        expr.* = Expr{.Number = NumberExpr{.value = value}};
+        return expr;
     }
 
-    pub fn func(name: String, args: []String, body: *Expr) Self {
-        const funcast: FunctionAST = .{ .name = name, .args = args, .body = body };
-        return .{ .etype = .FunctionExpr, .expr = .{ .FunctionExpr = funcast } };
+    pub fn function(allocator: std.mem.Allocator, proto: *const Expr, body: *const Expr) !*Self {
+        const expr = try allocator.create(Expr);
+        expr.* = Expr{.Function = FunctionExpr{.proto = proto, .body = body}};
+        return expr;
     }
 
-    pub fn number(val: f64) Self {
-        const numerast: NumberAST = .{ .val = val };
-        return .{ .etype = .NumberExpr, .expr = .{ .NumberExpr = numerast } };
+    pub fn variable(allocator: std.mem.Allocator, ident: []const u8) !*Self {
+        const expr = try allocator.create(Expr);
+        expr.* = Expr{.Variable = VariableExpr{.ident = ident}};
+        return expr;
     }
 
-    pub fn proto(name: String, args: []String) Self {
-        const protoast: ProtoAST = .{ .name = name, .args = args };
-        return .{ .etype = .PrototypeExpr, .expr = .{ .PrototypeExpr = protoast } };
+    pub fn call(allocator: std.mem.Allocator, name: []const u8, args: []*Expr) !*Self {
+        const expr = try allocator.create(Expr);
+        expr.* = Expr{.Call = CallExpr{.name = name, .args = args}};
+        return expr;
     }
 
-    // It's better to use `const MyError = error{SomeError, AnotherError};` and provide
-    // it as an error set
+    pub fn binop(allocator: std.mem.Allocator, op: lexer.Tag, lhs: *Expr, rhs: *Expr) !*Self {
+        const expr = try allocator.create(Expr);
+        expr.* = Expr{.BinOp = BinOpExpr{.op = op, .lhs = lhs, .rhs = rhs}};
+        return expr;
+    }
 
-    pub fn codegen(self: *Self, vm: VM, allocator: std.mem.Allocator) anyerror!Value {
-        return switch (self.etype) {
-            .PrototypeExpr => try self.expr.PrototypeExpr.codegen(vm, allocator),
-            .FunctionExpr => try self.expr.FunctionExpr.codegen(vm, allocator),
-            .BinaryExpr => try self.expr.BinaryExpr.codegen(vm, allocator),
-            .NumberExpr => try self.expr.NumberExpr.codegen(vm, allocator),
-            .VariableExpr => try self.expr.VariableExpr.codegen(vm, allocator),
-            .CallExpr => try self.expr.CallExpr.codegen(vm, allocator),
-        };
+    pub fn prototype(allocator: std.mem.Allocator, name: []const u8, args: [][]const u8)!*Self {
+        const expr = try allocator.create(Expr);
+        expr.* = Expr{.Prototype = PrototypeExpr{.name = name, .args = args}};
+        return expr;
+    }
+
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        switch(self) {
+            .Function  => |func_expr| try func_expr.format(fmt, options, writer),
+            .Number    => |number_expr| try number_expr.format(fmt, options, writer),
+            .Variable  => |var_expr| try var_expr.format(fmt, options, writer),
+            .Call      => |call_expr| try call_expr.format(fmt, options, writer),
+            .BinOp     => |binop_expr| try binop_expr.format(fmt, options, writer),
+            .Prototype => |proto_expr| try proto_expr.format(fmt, options, writer),
+        }
     }
 };
 
-const NumberAST = struct {
-    val: f64,
+pub const NumberExpr = struct {
+    value: f64,
 
     const Self = @This();
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
 
-    pub fn codegen(self: *const Self, vm: VM, allocator: std.mem.Allocator) !Value {
-        _ = allocator;
-
-        const tf64: LLVMType = llvm.LLVMDoubleTypeInContext(vm.context);
-        const n1: Value = llvm.LLVMConstReal(tf64, self.val);
-
-        return n1;
+        try writer.print("{d}", .{self.value});
     }
 };
 
-const VariableAST = struct {
-    name: String,
+pub const VariableExpr = struct {
+    ident: []const u8,
 
     const Self = @This();
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
 
-    pub fn codegen(self: *const Self, vm: VM, allocator: std.mem.Allocator) !Value {
-        _ = allocator;
-        const val = vm.namedValues.get(self.name) orelse {
-            std.log.err("Unknown variable name {s}\n", .{self.name});
-            return KaleidoscopeError.UnknownVariableName;
-        };
-
-        return val;
+        try writer.print("{s}", .{self.ident});
     }
 };
 
-const BinaryAST = struct {
+const BinOpExpr = struct {
+    op: lexer.Tag,
     lhs: *Expr,
     rhs: *Expr,
 
     const Self = @This();
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {   
+        _ = fmt;
+        _ = options;
 
-    pub fn codegen(self: *const Self, vm: VM, allocator: std.mem.Allocator) !Value {
-        // const tf64: llvm.LLVMTypeRef = llvm.LLVMDoubleTypeInContext(vm.context);
-        const n1: Value = try self.lhs.codegen(vm, allocator);
-        const n2: Value = try self.rhs.codegen(vm, allocator);
-
-        const addtmp = llvm.LLVMBuildFAdd(vm.builder, n1, n2, "addtmp");
-
-        return addtmp;
+        const op: u8 = switch(self.op) {
+            .lt => '<',
+            .gt => '>',
+            .minus => '-',
+            .plus => '+',
+            .multiply => '*',
+            .divide => '/',
+            else => '?',
+        };
+        try writer.print("({} {c} {})", .{self.lhs, op, self.rhs});
     }
 };
 
-const CallAST = struct {
-    name: String,
-    args: []Expr,
+const FunctionExpr = struct {
+    proto: *const Expr,
+    body: *const Expr,
 
     const Self = @This();
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
 
-    pub fn codegen(self: *Self, vm: VM, allocator: std.mem.Allocator) !Value {
-        const cname: [*c]const u8 = @ptrCast(self.name.ptr);
-
-        const callee: Value = llvm.LLVMGetNamedFunction(vm.module, cname);
-        if (callee == null) {
-            std.log.err("Unknown function reference: {s}\n", .{self.name});
-            return KaleidoscopeError.UnknownFunctionName;
-        }
-        const param_count = llvm.LLVMCountParams(callee);
-        if (param_count != self.args.len) {
-            std.log.err("Incorrect # arguments passed: function: {d}, passed: {d}\n", .{ param_count, self.args.len });
-            return KaleidoscopeError.UnknownFunctionName;
-        }
-
-        var argsv = std.ArrayList(Value).init(allocator);
-        defer argsv.deinit();
-
-        for (self.args) |*arg| {
-            const val: Value = try arg.codegen(vm, allocator);
-            try argsv.append(val);
-        }
-
-        // Getting function type
-        const function_type = llvm.LLVMGlobalGetValueType(callee);
-        return llvm.LLVMBuildCall2(vm.builder, function_type, callee, argsv.items.ptr, @intCast(argsv.items.len), "calltmp");
+        try writer.print("{} {{\n    ret ", .{self.proto});
+        try writer.print("{}", .{self.body});
+        try writer.print("\n}}", .{});
     }
 };
 
-const ProtoAST = struct {
-    name: String,
-    args: []String,
+const CallExpr = struct {
+    name: []const u8,
+    args: []*Expr,
 
     const Self = @This();
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
 
-    pub fn codegen(self: *Self, vm: VM, allocator: std.mem.Allocator) !Value {
-        const tf64: LLVMType = llvm.LLVMDoubleTypeInContext(vm.context);
-
-        // allocate vector of llvm.LLVMTypeRef; params[i] = tf64;
-        var param_types = std.ArrayList(LLVMType).init(allocator);
-        for (0..self.args.len) |i| {
-            _ = i;
-            try param_types.append(tf64);
-        }
-        defer param_types.deinit();
-
-        const len: c_uint = @intCast(param_types.items.len);
-
-        const func_type: LLVMType = llvm.LLVMFunctionType(tf64, // return type
-            param_types.items.ptr, // param types
-            len, // number of params
-            0 // non variadic (false)
-        );
-
-        // Create function with external linkage
-        const cname: [*c]const u8 = @ptrCast(self.name.ptr);
-        const func: Value = llvm.LLVMAddFunction(vm.module, cname, func_type);
-        llvm.LLVMSetLinkage(func, llvm.LLVMExternalLinkage);
-
-        for (0..len) |i| {
-            const j: c_uint = @intCast(i);
-            const param: Value = llvm.LLVMGetParam(func, j);
-
-            const arg_name: [*c]const u8 = @ptrCast(self.args[i].ptr);
-            const arg_len: c_uint = @intCast(self.args[i].len);
-            llvm.LLVMSetValueName2(param, arg_name, arg_len);
-        }
-
-        return func;
-    }
-};
-
-const FunctionAST = struct {
-    name: String,
-    args: []String,
-
-    body: *Expr,
-
-    const Self = @This();
-
-    pub fn codegen(self: *Self, vm: VM, allocator: std.mem.Allocator) !Value {
-        const cname: [*c]const u8 = @ptrCast(self.name.ptr);
-
-        const pre_func: Value = llvm.LLVMGetNamedFunction(vm.module, cname);
-
-        const func = if (pre_func == null) blk: {
-            var proto_ast = ProtoAST{ .name = self.name, .args = self.args };
-            break :blk try proto_ast.codegen(vm, allocator);
-        } else pre_func;
-
-        vm.update_names(func, allocator);
-
-        // Create a new basic block to start insertion into.
-        const entry: llvm.LLVMBasicBlockRef = llvm.LLVMAppendBasicBlockInContext(vm.context, func, "entry");
-        llvm.LLVMPositionBuilderAtEnd(vm.builder, entry);
-
-        const b = try self.body.codegen(vm, allocator);
-        _ = llvm.LLVMBuildRet(vm.builder, b);
-
-        return func;
-    }
-};
-
-pub fn LLVM() type {
-    return struct {
-        context: Context,
-        builder: Builder,
-        module: Module,
-        namedValues: *Map,
-
-        const Self = @This();
-        const Map = std.StringHashMap(Value);
-
-        pub fn init(module_name: String, allocator: std.mem.Allocator) !Self {
-            const context: Context = llvm.LLVMContextCreate();
-            const cname: [*c]const u8 = @ptrCast(module_name.ptr);
-            const module: Module = llvm.LLVMModuleCreateWithNameInContext(cname, context);
-            const builder: Builder = llvm.LLVMCreateBuilderInContext(context);
-
-            const namedValues = try allocator.create(Map);
-            namedValues.* = Map.init(allocator);
-
-            return .{ .context = context, .builder = builder, .module = module, .namedValues = namedValues };
-        }
-
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            self.namedValues.deinit();
-            allocator.destroy(self.namedValues);
-            llvm.LLVMDisposeBuilder(self.builder);
-            llvm.LLVMDisposeModule(self.module);
-            llvm.LLVMContextDispose(self.context);
-            llvm.LLVMShutdown();
-        }
-
-        pub fn update_names(self: *Self, func: Value, allocator: std.mem.Allocator) !void {
-            self.namedValues.clearRetainingCapacity();
-
-            const param_count = llvm.LLVMCountParams(func);
-            if (param_count == 0) return;
-
-            const params = try allocator.alloc(Value, param_count);
-            defer allocator.free(params);
-
-            llvm.LLVMGetParams(func, params.ptr);
-            for (params) |param| {
-                const param_name_ptr = llvm.LLVMGetValueName(param);
-                const param_name = if (param_name_ptr != null)
-                    std.mem.span(param_name_ptr)
-                else
-                    "<unnamed>";
-                try self.namedValues.put(param_name, param);
+        try writer.print("{s}(", .{self.name});
+        var isFirst: bool = true;
+        for (self.args) |arg| {
+            if (isFirst) {
+                isFirst = false;
+            } else {
+                try writer.print(", ", .{});
             }
+            try writer.print("{}", .{arg});
         }
-    };
+        try writer.print(")", .{});
+    }
+};
+
+const PrototypeExpr = struct {
+    name: []const u8,
+    args: [][]const u8,
+
+    const Self = @This();
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}(", .{self.name});
+        var isFirst: bool = true;
+        for (self.args) |arg| {
+            if (isFirst) {
+                isFirst = false;
+            } else {
+                try writer.print(" ", .{});
+            }
+
+            try writer.print("{s}", .{arg});
+        }
+        try writer.print(")", .{});
+    }
+};
+
+test "Simple AST creation" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const num = try Expr.number(allocator, 5);
+    try testing.expectEqual(num.Number.value, 5);
+
+    const args = std.ArrayList([]const u8).init(allocator);
+    const proto = try Expr.prototype(allocator, "_lambda", args.items);
+    const func = try Expr.function(allocator, proto, num);
+    try testing.expectEqual(func.Function.body.Number.value, 5);
+
+    const variable = try Expr.variable(allocator, "foo");
+    try testing.expectEqualStrings(variable.Variable.ident, "foo");
 }
 
-const VM = LLVM();
+test "Simple print number usage" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
 
-test "Dummy" {
-    try testing.expect(1 == 1);
+    const num = try Expr.number(allocator, 5);
+    try writer.print("{}", .{num});
+    try testing.expectEqualStrings(stream.getWritten(), "5");
+}
+
+test "Simple print function usage" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    const args = std.ArrayList([]const u8).init(allocator);
+    const proto = try Expr.prototype(allocator, "_lambda", args.items);
+    const num = try Expr.number(allocator, 5);
+    const func = try Expr.function(allocator, proto, num);
+    try writer.print("{}", .{func});
+    try testing.expectEqualStrings(stream.getWritten(), "_lambda() {\n    ret 5\n}");
+}
+
+test "Prorotyped function with multiple variables" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    var args = std.ArrayList([]const u8).init(allocator);
+    try args.append("x");
+    try args.append("y");
+
+    const proto = try Expr.prototype(allocator, "_lambda", args.items);
+
+    const lhs = try Expr.variable(allocator, "x");
+    const rhs = try Expr.number(allocator, 5);
+    const op = lexer.Tag.plus;
+
+    const binop = try Expr.binop(allocator, op, lhs, rhs);
+    const func = try Expr.function(allocator, proto, binop);
+    try writer.print("{}", .{func});
+    try testing.expectEqualStrings(stream.getWritten(), "_lambda(x y) {\n    ret (x + 5)\n}");
+}
+
+test "Simple function call usage" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    const var1 = try Expr.variable(allocator, "x");
+    const var2 = try Expr.variable(allocator, "y");
+    var args_buf = [_]*Expr{var1, var2};
+    const args: []*Expr = args_buf[0..];
+    const fname = "foo";
+    const call = try Expr.call(allocator, fname, args);
+
+    try writer.print("{}", .{call});
+    try testing.expectEqualStrings(stream.getWritten(), "foo(x, y)");
+}
+
+test "Simple binops usage" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    const lhs = try Expr.variable(allocator, "x");
+    const rhs = try Expr.number(allocator, 5);
+    const op = lexer.Tag.plus;
+
+    const binop = try Expr.binop(allocator, op, lhs, rhs);
+    try writer.print("{}", .{binop});
+    try testing.expectEqualStrings(stream.getWritten(), "(x + 5)");
+}
+
+test "Nested binops usage" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    const lhs = try Expr.variable(allocator, "x");
+    const rhs = try Expr.number(allocator, 5);
+    const op = lexer.Tag.plus;
+    const binop1 = try Expr.binop(allocator, op, lhs, rhs);
+
+    const rhs2 = try Expr.variable(allocator, "y");
+    const op2 = lexer.Tag.multiply;
+    const binop = try Expr.binop(allocator, op2, binop1, rhs2);
+    try writer.print("{}", .{binop});
+    try testing.expectEqualStrings(stream.getWritten(), "((x + 5) * y)");
 }

@@ -3,7 +3,7 @@ const testing = std.testing;
 
 // The lexer returns tokens [0-255] if it is an unknown character, otherwise one
 // of these for known things.
-const Tag = enum {
+pub const Tag = enum {
     eof,
 
     // commands
@@ -14,11 +14,22 @@ const Tag = enum {
     identifier,
     number,
 
+    // helpers
+    lparen,
+    rparen,
+    comma,
+    lt,
+    gt,
+    minus,
+    plus,
+    multiply,
+    divide,
+
     // everything else
     unknown,
 };
 
-const Token = struct {
+pub const Token = struct {
     s: u16,
     e: u16,
     tag: Tag,
@@ -48,7 +59,7 @@ fn isnewline(c: u8) bool {
     return ((c == '\n') or (c == '\r'));
 }
 
-const Lexer = struct {
+pub const Lexer = struct {
     buf: []const u8,
     i: u16 = 0,
     char: u8 = 0,
@@ -63,15 +74,24 @@ const Lexer = struct {
         return lexer;
     }
 
-    pub fn next_token(self: *Self) Token {
-        self.skip_whitechars();
+    pub fn nextToken(self: *Self) Token {
+        self.skipWhitechars();
         
         const token: Token = switch(self.char) {
             0 => .{.s = self.i, .e = self.i, .tag = .eof},
             '#' => cmt: {
-                self.skip_comment();
-                break :cmt self.next_token();
+                self.skipComment();
+                break :cmt self.nextToken();
             },
+            ')' => self.charToken(.rparen),
+            '(' => self.charToken(.lparen),
+            ',' => self.charToken(.comma),
+            '<' => self.charToken(.lt),
+            '>' => self.charToken(.gt),
+            '+' => self.charToken(.plus),
+            '-' => self.charToken(.minus),
+            '*' => self.charToken(.multiply),
+            '/' => self.charToken(.divide),
             else => blk: {
                 if (isalpha(self.char)) {
                     const ident = self.read_identifier();
@@ -83,7 +103,7 @@ const Lexer = struct {
                     break :blk self.read_number();
                 }
 
-                self.next_char();
+                self.nextChar();
                 break :blk .{.s = self.i - 1, .e = self.i, .tag = .unknown};
             }
         };
@@ -91,13 +111,19 @@ const Lexer = struct {
         return token;
     }
 
-    fn skip_whitechars(self: *Self) void {
+    fn skipWhitechars(self: *Self) void {
         while (isspace(self.char)) {
-            self.next_char();
+            self.nextChar();
         }
     }
 
-    fn next_char(self: *Self) void {
+    fn charToken(self: *Self, tag: Tag) Token {
+        const token: Token = .{.s = self.i, .e = self.i+1, .tag = tag};
+        self.nextChar();
+        return token;
+    }
+
+    fn nextChar(self: *Self) void {
         self.i += 1;
         if (self.i >= self.buf.len) {
             self.char = 0;
@@ -110,15 +136,15 @@ const Lexer = struct {
         std.debug.assert(isalpha(self.char));
         const pos = self.i;
         while (isalphanum(self.char)) {
-            self.next_char();
+            self.nextChar();
         }
 
         return .{.s = pos, .e = self.i, .tag = .identifier};
     }
 
-    fn skip_comment(self: *Self) void {
+    fn skipComment(self: *Self) void {
         while (!(isnewline(self.char)) and self.char != 0) {
-            self.next_char();
+            self.nextChar();
         }
     }
 
@@ -126,7 +152,7 @@ const Lexer = struct {
         std.debug.assert(isnum(self.char));
         const pos = self.i;
         while (isnum(self.char)) {
-            self.next_char();
+            self.nextChar();
         }
 
         return .{.s = pos, .e = self.i, .tag = .number};
@@ -136,7 +162,7 @@ const Lexer = struct {
         return std.mem.eql(u8, self.buf[token.s..token.e], kw);
     }
 
-    fn inspect(self: Self, token: Token) []const u8 {
+    pub fn inspect(self: Self, token: Token) []const u8 {
         return self.buf[token.s..token.e];
     }
 };
@@ -146,36 +172,45 @@ test "identifier" {
     const buffer = "fib";
     var lexer = Lexer.create(buffer);
 
-    const token = lexer.next_token();
+    const token = lexer.nextToken();
     try testing.expect(token.tag == .identifier);
     try testing.expectEqualStrings(lexer.inspect(token), "fib");
 
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }
 
 test "def" {
-    const expected: [5] struct {[]const u8, Tag} = .{
+    const expected = [_] struct {[]const u8, Tag} {
         .{"def", .def},
         .{"fib", .identifier},
-        .{"(", .unknown},
+        .{"(", .lparen},
         .{"x", .identifier},
-        .{")", .unknown},
+        .{")", .rparen},
+        .{",", .comma},
+        .{"<", .lt},
+        .{">", .gt},
+        .{"+", .plus},
+        .{"-", .minus},
+        .{"*", .multiply},
+        .{"/", .divide},
     };
-    const buffer = "def fib(x)";
+    const buffer = "def fib(x),<>+-*/";
     var lexer = Lexer.create(buffer);
 
     for (expected) |p| {
-        const token = lexer.next_token();
+        const token = lexer.nextToken();
+        // std.debug.print("{}:{}\n", .{token.tag, p.@"1"});
+        // std.debug.print("{s}:{s}\n", .{lexer.inspect(token), p.@"0"});
         try testing.expect(token.tag == p.@"1");
         try testing.expectEqualStrings(lexer.inspect(token), p.@"0");
     }
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }
 
 test "numbers" {
-    const expected: [3] struct {[]const u8, Tag} = .{
+    const expected = [_] struct {[]const u8, Tag} {
         .{"35", .number},
         .{"foo2", .identifier},
         .{"29.48", .number},
@@ -184,11 +219,11 @@ test "numbers" {
     var lexer = Lexer.create(buffer);
 
     for (expected) |p| {
-        const token = lexer.next_token();
+        const token = lexer.nextToken();
         try testing.expect(token.tag == p.@"1");
         try testing.expectEqualStrings(lexer.inspect(token), p.@"0");
     }
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }
 
@@ -201,10 +236,10 @@ test "comments" {
     var lexer = Lexer.create(buffer);
 
     for (expected) |p| {
-        const token = lexer.next_token();
+        const token = lexer.nextToken();
         try testing.expect(token.tag == p.@"1");
         try testing.expectEqualStrings(lexer.inspect(token), p.@"0");
     }
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }
