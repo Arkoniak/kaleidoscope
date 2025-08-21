@@ -18,6 +18,12 @@ pub const Tag = enum {
     lparen,
     rparen,
     comma,
+    lt,
+    gt,
+    minus,
+    plus,
+    multiply,
+    divide,
 
     // everything else
     unknown,
@@ -69,29 +75,23 @@ pub const Lexer = struct {
     }
 
     pub fn nextToken(self: *Self) Token {
-        self.skip_whitechars();
+        self.skipWhitechars();
         
         const token: Token = switch(self.char) {
             0 => .{.s = self.i, .e = self.i, .tag = .eof},
             '#' => cmt: {
-                self.skip_comment();
+                self.skipComment();
                 break :cmt self.nextToken();
             },
-            ')' => rparen: {
-                const rparen: Token = .{.s = self.i, .e = self.i+1, .tag = .rparen};
-                self.nextChar();
-                break :rparen rparen;
-            },
-            '(' => lparen: {
-                const lparen: Token = .{.s = self.i, .e = self.i+1, .tag = .lparen};
-                self.nextChar();
-                break :lparen lparen;
-            },
-            ',' => comma: {
-                const comma: Token = .{.s = self.i, .e = self.i+1, .tag = .comma};
-                self.nextChar();
-                break :comma comma;
-            },
+            ')' => self.charToken(.rparen),
+            '(' => self.charToken(.lparen),
+            ',' => self.charToken(.comma),
+            '<' => self.charToken(.lt),
+            '>' => self.charToken(.gt),
+            '+' => self.charToken(.plus),
+            '-' => self.charToken(.minus),
+            '*' => self.charToken(.multiply),
+            '/' => self.charToken(.divide),
             else => blk: {
                 if (isalpha(self.char)) {
                     const ident = self.read_identifier();
@@ -111,10 +111,16 @@ pub const Lexer = struct {
         return token;
     }
 
-    fn skip_whitechars(self: *Self) void {
+    fn skipWhitechars(self: *Self) void {
         while (isspace(self.char)) {
             self.nextChar();
         }
+    }
+
+    fn charToken(self: *Self, tag: Tag) Token {
+        const token: Token = .{.s = self.i, .e = self.i+1, .tag = tag};
+        self.nextChar();
+        return token;
     }
 
     fn nextChar(self: *Self) void {
@@ -136,7 +142,7 @@ pub const Lexer = struct {
         return .{.s = pos, .e = self.i, .tag = .identifier};
     }
 
-    fn skip_comment(self: *Self) void {
+    fn skipComment(self: *Self) void {
         while (!(isnewline(self.char)) and self.char != 0) {
             self.nextChar();
         }
@@ -182,8 +188,14 @@ test "def" {
         .{"x", .identifier},
         .{")", .rparen},
         .{",", .comma},
+        .{"<", .lt},
+        .{">", .gt},
+        .{"+", .plus},
+        .{"-", .minus},
+        .{"*", .multiply},
+        .{"/", .divide},
     };
-    const buffer = "def fib(x),";
+    const buffer = "def fib(x),<>+-*/";
     var lexer = Lexer.create(buffer);
 
     for (expected) |p| {
@@ -198,7 +210,7 @@ test "def" {
 }
 
 test "numbers" {
-    const expected: [3] struct {[]const u8, Tag} = .{
+    const expected = [_] struct {[]const u8, Tag} {
         .{"35", .number},
         .{"foo2", .identifier},
         .{"29.48", .number},

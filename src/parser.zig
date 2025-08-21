@@ -12,6 +12,26 @@ const ParserError = error{
     OutOfMemory,
 };
 
+const Precedence = enum(u8) {
+    wrong = 0,
+    lowest = 1,
+    less = 10,
+    plus = 20,
+    multiplication = 40,
+};
+
+fn binopPrecedence(tag: lexer.Tag) Precedence {
+    return switch(tag) {
+        .lt => .less,
+        .gt => .less,
+        .minus => .plus,
+        .plus  => .plus,
+        .multiply => .multiplication,
+        .divide   => .multiplication,
+        else => .wrong,
+    };
+}
+
 pub const Parser = struct {
     lexer: lexer.Lexer,
     allocator: std.mem.Allocator,
@@ -69,14 +89,37 @@ pub const Parser = struct {
     fn parseExpr(self: *Self) ParserError!?*ast.Expr {
         const lhs = try self.parsePrimary() orelse return null;
 
-        return lhs;
+        return self.parseBinOpExprRHS(@intFromEnum(Precedence.lowest), lhs);
+    }
+
+    /// binoprhs
+    ///   ::= ('+' primary)*
+    fn parseBinOpExprRHS(self: *Self, exprPrec: u8, lhs: *ast.Expr) ParserError!?*ast.Expr {
+        var lhs1 = lhs;
+        while(true) {
+            const tokPrec: u8 = @intFromEnum(binopPrecedence(self.token.tag));
+            if (tokPrec < exprPrec) {
+                return lhs1;
+            }
+            
+            const binop = self.token.tag;
+            self.nextToken();
+
+            var rhs = try self.parsePrimary() orelse return null;
+            
+            const nextPrec: u8 = @intFromEnum(binopPrecedence(self.token.tag));
+            if (tokPrec < nextPrec) {
+                rhs = try self.parseBinOpExprRHS(tokPrec + 1, rhs) orelse return null;
+            }
+            lhs1 = try ast.Expr.binop(self.allocator, binop, lhs1, rhs);
+        }
     }
 
     /// primary
     ///   ::= identifierexpr
     ///   ::= numberexpr
     ///   ::= parenexpr
-    fn parsePrimary(self: *Self) !?*ast.Expr {
+    fn parsePrimary(self: *Self) ParserError!?*ast.Expr {
         switch(self.token.tag) {
             lexer.Tag.number => {
                 return try self.parseNumberExpr();
@@ -84,8 +127,24 @@ pub const Parser = struct {
             lexer.Tag.identifier => {
                 return try self.parseIdentifierExpr();
             },
+            lexer.Tag.lparen => {
+                return try self.parseParenExpr();
+            },
             else => return null,
         }
+    }
+
+    /// parenexpr ::= '(' expression ')'
+    fn parseParenExpr(self: *Self) ParserError!?*ast.Expr {
+        self.nextToken();
+        const expr = try self.parseExpr() orelse return null;
+        if (self.token.tag != lexer.Tag.rparen) {
+            // TODO: should be error
+            return null;
+        }
+        self.nextToken();
+
+        return expr;
     }
 
     /// numberexpr ::= number
@@ -174,6 +233,23 @@ test "Parsing variable" {
     try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo\n}");
 }
 
+test "Parsing expression in parenthesis" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const program = "(foo)";
+
+    var parser = Parser.create(program, allocator);
+    const expr = try parser.parse() orelse unreachable;
+
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writer.print("{}", .{expr});
+    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo\n}");
+}
+
 test "Parsing call" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -208,3 +284,36 @@ test "Parsing call with trailing commas" {
     try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo(x, y)\n}");
 }
 
+test "Parsing operations with precedence" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const program = "x + y";
+
+    var parser = Parser.create(program, allocator);
+    const expr = try parser.parse() orelse unreachable;
+
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writer.print("{}", .{expr});
+    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret (x + y)\n}");
+}
+
+test "Parsing nested operations with precedence" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const program = "2 + (3 + 4) * 5";
+
+    var parser = Parser.create(program, allocator);
+    const expr = try parser.parse() orelse unreachable;
+
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writer.print("{}", .{expr});
+    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret (2 + ((3 + 4) * 5))\n}");
+}
