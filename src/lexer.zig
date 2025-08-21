@@ -14,6 +14,11 @@ pub const Tag = enum {
     identifier,
     number,
 
+    // helpers
+    lparen,
+    rparen,
+    comma,
+
     // everything else
     unknown,
 };
@@ -63,14 +68,29 @@ pub const Lexer = struct {
         return lexer;
     }
 
-    pub fn next_token(self: *Self) Token {
+    pub fn nextToken(self: *Self) Token {
         self.skip_whitechars();
         
         const token: Token = switch(self.char) {
             0 => .{.s = self.i, .e = self.i, .tag = .eof},
             '#' => cmt: {
                 self.skip_comment();
-                break :cmt self.next_token();
+                break :cmt self.nextToken();
+            },
+            ')' => rparen: {
+                const rparen: Token = .{.s = self.i, .e = self.i+1, .tag = .rparen};
+                self.nextChar();
+                break :rparen rparen;
+            },
+            '(' => lparen: {
+                const lparen: Token = .{.s = self.i, .e = self.i+1, .tag = .lparen};
+                self.nextChar();
+                break :lparen lparen;
+            },
+            ',' => comma: {
+                const comma: Token = .{.s = self.i, .e = self.i+1, .tag = .comma};
+                self.nextChar();
+                break :comma comma;
             },
             else => blk: {
                 if (isalpha(self.char)) {
@@ -83,7 +103,7 @@ pub const Lexer = struct {
                     break :blk self.read_number();
                 }
 
-                self.next_char();
+                self.nextChar();
                 break :blk .{.s = self.i - 1, .e = self.i, .tag = .unknown};
             }
         };
@@ -93,11 +113,11 @@ pub const Lexer = struct {
 
     fn skip_whitechars(self: *Self) void {
         while (isspace(self.char)) {
-            self.next_char();
+            self.nextChar();
         }
     }
 
-    fn next_char(self: *Self) void {
+    fn nextChar(self: *Self) void {
         self.i += 1;
         if (self.i >= self.buf.len) {
             self.char = 0;
@@ -110,7 +130,7 @@ pub const Lexer = struct {
         std.debug.assert(isalpha(self.char));
         const pos = self.i;
         while (isalphanum(self.char)) {
-            self.next_char();
+            self.nextChar();
         }
 
         return .{.s = pos, .e = self.i, .tag = .identifier};
@@ -118,7 +138,7 @@ pub const Lexer = struct {
 
     fn skip_comment(self: *Self) void {
         while (!(isnewline(self.char)) and self.char != 0) {
-            self.next_char();
+            self.nextChar();
         }
     }
 
@@ -126,7 +146,7 @@ pub const Lexer = struct {
         std.debug.assert(isnum(self.char));
         const pos = self.i;
         while (isnum(self.char)) {
-            self.next_char();
+            self.nextChar();
         }
 
         return .{.s = pos, .e = self.i, .tag = .number};
@@ -146,31 +166,34 @@ test "identifier" {
     const buffer = "fib";
     var lexer = Lexer.create(buffer);
 
-    const token = lexer.next_token();
+    const token = lexer.nextToken();
     try testing.expect(token.tag == .identifier);
     try testing.expectEqualStrings(lexer.inspect(token), "fib");
 
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }
 
 test "def" {
-    const expected: [5] struct {[]const u8, Tag} = .{
+    const expected = [_] struct {[]const u8, Tag} {
         .{"def", .def},
         .{"fib", .identifier},
-        .{"(", .unknown},
+        .{"(", .lparen},
         .{"x", .identifier},
-        .{")", .unknown},
+        .{")", .rparen},
+        .{",", .comma},
     };
-    const buffer = "def fib(x)";
+    const buffer = "def fib(x),";
     var lexer = Lexer.create(buffer);
 
     for (expected) |p| {
-        const token = lexer.next_token();
+        const token = lexer.nextToken();
+        // std.debug.print("{}:{}\n", .{token.tag, p.@"1"});
+        // std.debug.print("{s}:{s}\n", .{lexer.inspect(token), p.@"0"});
         try testing.expect(token.tag == p.@"1");
         try testing.expectEqualStrings(lexer.inspect(token), p.@"0");
     }
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }
 
@@ -184,11 +207,11 @@ test "numbers" {
     var lexer = Lexer.create(buffer);
 
     for (expected) |p| {
-        const token = lexer.next_token();
+        const token = lexer.nextToken();
         try testing.expect(token.tag == p.@"1");
         try testing.expectEqualStrings(lexer.inspect(token), p.@"0");
     }
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }
 
@@ -201,10 +224,10 @@ test "comments" {
     var lexer = Lexer.create(buffer);
 
     for (expected) |p| {
-        const token = lexer.next_token();
+        const token = lexer.nextToken();
         try testing.expect(token.tag == p.@"1");
         try testing.expectEqualStrings(lexer.inspect(token), p.@"0");
     }
-    const token_eof = lexer.next_token();
+    const token_eof = lexer.nextToken();
     try testing.expect(token_eof.tag == .eof);
 }

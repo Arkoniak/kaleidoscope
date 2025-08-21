@@ -3,21 +3,39 @@ const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
 const testing = std.testing;
 
+const ParserError = error{
+    // std.fmt.parseFloat errors
+    InvalidCharacter,
+    Overflow,
+    
+    // allocator.create errors
+    OutOfMemory,
+};
+
 pub const Parser = struct {
     lexer: lexer.Lexer,
     allocator: std.mem.Allocator,
-    token: lexer.Token = undefined,
+    token: lexer.Token,
+    peek_token: lexer.Token,
 
     const Self = @This();
     pub fn create(buf: []const u8, allocator: std.mem.Allocator) Self {
-        const lex = lexer.Lexer.create(buf);
-        var parser: Parser = .{.lexer = lex, .allocator = allocator};
-        parser.token = parser.nextToken();
+        var lex = lexer.Lexer.create(buf);
+        const token = lex.nextToken();
+        const peek_token = lex.nextToken();
+        const parser: Parser = .{.lexer = lex, .allocator = allocator, .token = token, .peek_token = peek_token};
         return parser;
     }
 
-    fn nextToken(self: *Self) lexer.Token {
-        return self.lexer.next_token();
+    fn nextToken(self: *Self) void {
+        self.token = self.peek_token;
+        self.peek_token = self.lexer.nextToken();
+    }
+
+    fn skipToken(self: *Self) void {
+        self.peek_token = self.lexer.nextToken();
+        self.token = self.peek_token;
+        self.peek_token = self.lexer.nextToken();
     }
 
     pub fn parse(self: *Self) !?*ast.Expr {
@@ -34,7 +52,7 @@ pub const Parser = struct {
     fn handleTopLevelExpr(self: *Self) !?*ast.Expr {
         const expr = try self.parseTopLevelExpr();
         if (expr == null) {
-            self.token = self.nextToken();
+            self.nextToken();
         }
         return expr;
     }
@@ -48,7 +66,7 @@ pub const Parser = struct {
     /// expression
     ///   ::= primary binoprhs
     ///
-    fn parseExpr(self: *Self) !?*ast.Expr {
+    fn parseExpr(self: *Self) ParserError!?*ast.Expr {
         const lhs = try self.parsePrimary() orelse return null;
 
         return lhs;
@@ -59,25 +77,57 @@ pub const Parser = struct {
     ///   ::= numberexpr
     ///   ::= parenexpr
     fn parsePrimary(self: *Self) !?*ast.Expr {
-        defer self.token = self.nextToken();
         switch(self.token.tag) {
             lexer.Tag.number => {
-                const num_s = self.lexer.inspect(self.token);
-                const num = try std.fmt.parseFloat(f64, num_s);
-                const num_expr = ast.Expr.number(self.allocator, num);
-                return num_expr;
+                return try self.parseNumberExpr();
+            },
+            lexer.Tag.identifier => {
+                return try self.parseIdentifierExpr();
             },
             else => return null,
         }
     }
 
-    // identifierexpr
-    //   ::= identifier
-    //   ::= identifier '(' expression* ')'
+    /// numberexpr ::= number
+    fn parseNumberExpr(self: *Self) ParserError!?*ast.Expr {
+        defer self.nextToken();
+        const num_s = self.lexer.inspect(self.token);
+        const num = try std.fmt.parseFloat(f64, num_s);
+        const num_expr = try ast.Expr.number(self.allocator, num);
+        return num_expr;
+    }
 
-    // fn parseIdentifierExpr(self: *Self) ?*ast.Expr {
-    //
-    // }
+    /// identifierexpr
+    ///   ::= identifier
+    ///   ::= identifier '(' expression* ')'
+    fn parseIdentifierExpr(self: *Self) ParserError!?*ast.Expr {
+        const ident = self.lexer.inspect(self.token);
+        self.nextToken();
+
+        if (self.token.tag != lexer.Tag.lparen) {
+            const var_expr = try ast.Expr.variable(self.allocator, ident);
+            return var_expr;
+        }
+        var args = std.ArrayList(*ast.Expr).init(self.allocator);
+        while (true) {
+            self.nextToken();
+            if (self.token.tag == lexer.Tag.rparen) {
+                break;
+            }
+            const arg = try self.parseExpr() orelse return null;
+            try args.append(arg);
+
+            if (self.token.tag == lexer.Tag.rparen) {
+                break;
+            }
+            if (self.token.tag != lexer.Tag.comma) {
+                return null;
+            }
+        }
+        self.nextToken();
+        const call_expr = try ast.Expr.call(self.allocator, ident, args.items);
+        return call_expr;
+    }
 };
 
 test "Lexer mutability inside parser" {
@@ -107,19 +157,54 @@ test "Parsing number" {
     try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret 5\n}");
 }
 
-// test "Parsing variable" {
-//     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-//     const program = "foo";
-//
-//     var parser = Parser.create(program, allocator);
-//     const expr = parser.parse() orelse unreachable;
-//
-//     var buffer: [4096]u8 = undefined;
-//     var stream = std.io.fixedBufferStream(&buffer);
-//     const writer = stream.writer();
-//
-//     try writer.print("{}", .{expr});
-//     try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo\n}");
-// }
+test "Parsing variable" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const program = "foo";
+
+    var parser = Parser.create(program, allocator);
+    const expr = try parser.parse() orelse unreachable;
+
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writer.print("{}", .{expr});
+    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo\n}");
+}
+
+test "Parsing call" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const program = "foo(x, y)";
+
+    var parser = Parser.create(program, allocator);
+    const expr = try parser.parse() orelse unreachable;
+
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writer.print("{}", .{expr});
+    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo(x, y)\n}");
+}
+
+test "Parsing call with trailing commas" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const program = "foo(x, y, )";
+
+    var parser = Parser.create(program, allocator);
+    const expr = try parser.parse() orelse unreachable;
+
+    var buffer: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writer.print("{}", .{expr});
+    try testing.expectEqualStrings(stream.getWritten(), "double _lambda() {\n    ret foo(x, y)\n}");
+}
+
