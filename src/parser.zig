@@ -161,8 +161,7 @@ pub const Parser = struct {
         self.nextToken();
         const expr = try self.parseExpr() orelse return null;
         if (self.token.tag != lexer.Tag.rparen) {
-            // TODO: should be error
-            return null;
+            return self.logError("expected ')'");
         }
         self.nextToken();
 
@@ -202,7 +201,7 @@ pub const Parser = struct {
                 break;
             }
             if (self.token.tag != .comma) {
-                return null;
+                return self.logError("Expected ')' or ',' in argument list");
             }
         }
         self.nextToken();
@@ -213,12 +212,14 @@ pub const Parser = struct {
     /// prototype
     ///   ::= id '(' id* ')'
     fn parsePrototypeExpr(self: *Self) ParserError!?*ast.Expr {
+        if (self.token.tag != .identifier) {
+            return self.logError("Expected function name in prototype");
+        }
         const fname = self.lexer.inspect(self.token);
         self.nextToken();
 
         if (self.token.tag != .lparen) {
-            // TODO: this should return an error
-            return null;
+            return self.logError("Expected '(' in prototype");
         }
         self.nextToken();
 
@@ -229,8 +230,7 @@ pub const Parser = struct {
             self.nextToken();
         }
         if (self.token.tag != .rparen) {
-            // TODO: this should return an error
-            return null;
+            return self.logError("Expected ')' in prototype");
         }
         self.nextToken();
 
@@ -253,6 +253,12 @@ pub const Parser = struct {
         self.nextToken();
         const proto_expr = try self.parsePrototypeExpr() orelse return null;
         return proto_expr;
+    }
+
+    fn logError(self: *Self, err: []const u8) ?*ast.Expr {
+        _ = self;
+        std.debug.print("Error: {s}\n", .{err});
+        return null;
     }
 };
 
