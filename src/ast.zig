@@ -41,7 +41,7 @@ pub const Expr = union(enum) {
         return expr;
     }
 
-    pub fn prototype(allocator: std.mem.Allocator, name: []const u8, args: [][]const u8)!*Self {
+    pub fn prototype(allocator: std.mem.Allocator, name: []const u8, args: []const []const u8)!*Self {
         const expr = try allocator.create(Expr);
         expr.* = Expr{.Prototype = PrototypeExpr{.name = name, .args = args}};
         return expr;
@@ -176,7 +176,7 @@ const CallExpr = struct {
 
 const PrototypeExpr = struct {
     name: []const u8,
-    args: [][]const u8,
+    args: []const []const u8,
 
     const Self = @This();
     pub fn format(
@@ -241,8 +241,7 @@ test "Simple print function usage" {
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
 
-    const args = std.ArrayList([]const u8).init(allocator);
-    const proto = try Expr.prototype(allocator, "_lambda", args.items);
+    const proto = try Expr.prototype(allocator, "_lambda", &[_][]const u8{});
     const num = try Expr.number(allocator, 5);
     const func = try Expr.function(allocator, proto, num);
     try writer.print("{}", .{func});
@@ -257,11 +256,7 @@ test "Prorotyped function with multiple variables" {
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
 
-    var args = std.ArrayList([]const u8).init(allocator);
-    try args.append("x");
-    try args.append("y");
-
-    const proto = try Expr.prototype(allocator, "_lambda", args.items);
+    const proto = try Expr.prototype(allocator, "_lambda", &[_][]const u8{"x", "y"});
 
     const lhs = try Expr.variable(allocator, "x");
     const rhs = try Expr.number(allocator, 5);
