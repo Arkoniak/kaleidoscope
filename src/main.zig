@@ -3,6 +3,8 @@ const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
 const parser_module = @import("parser.zig");
 const Parser = @import("parser.zig").Parser;
+const codegen = @import("codegen.zig");
+const VM = @import("codegen.zig").VM;
 const testing = std.testing;
 
 pub fn main() !void {
@@ -12,6 +14,9 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+
+    var vm = try VM.init("kaleidoscope", allocator);
+    defer vm.deinit(allocator);
 
     var buffer: [4096]u8 = undefined;
     var input_len: u64 = 0;
@@ -49,4 +54,8 @@ test "AST" {
 
 test "Parser" {
     _ = parser_module;
+}
+
+test "Codegen" {
+    _ = codegen;
 }
