@@ -3,6 +3,8 @@ const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
 const parser_module = @import("parser.zig");
 const Parser = @import("parser.zig").Parser;
+const vm_module = @import("vm.zig");
+const VM = @import("vm.zig").VM;
 const testing = std.testing;
 
 pub fn main() !void {
@@ -12,6 +14,12 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+
+    var vm_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer vm_arena.deinit();
+    const vm_allocator = vm_arena.allocator();
+    var vm = try VM.init("kaleidoscope", vm_allocator);
+    defer vm.deinit();
 
     var buffer: [4096]u8 = undefined;
     var input_len: u64 = 0;
@@ -31,7 +39,9 @@ pub fn main() !void {
             } 
             var parser = Parser.create(buffer[0..input_len], allocator);
             const expr = try parser.parse() orelse continue;
-            try stdout.print("{}\n", .{expr});
+            const value = try expr.codegen(vm, allocator);
+            const value_str = try vm_module.valueToString(value, allocator);
+            try stdout.print("{s}\n", .{value_str});
             input_len = 0;
         } else {
             break;
@@ -49,4 +59,8 @@ test "AST" {
 
 test "Parser" {
     _ = parser_module;
+}
+
+test "VM" {
+    _ = vm_module;
 }

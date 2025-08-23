@@ -2,20 +2,48 @@ const std = @import("std");
 
 const name = "kaleidoscope";
 
-pub fn build(b: *std.Build) void {
+fn makeModule(b: *std.Build) !*std.Build.Module {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{
-        .name = name,
+    const module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
-    exe.linkLibC();
+    const llvm_config = try b.findProgram(&[_][]const u8{ "llvm-config" }, &[_][]const u8{});
 
-    exe.linkSystemLibrary("LLVM-20"); // Ubuntu
+    const include_path_raw = b.run(&[_][]const u8{ llvm_config, "--includedir" });
+    const include_path = std.mem.trimRight(u8, include_path_raw, "\t\r\n");
+    module.addIncludePath(.{ .cwd_relative = include_path });
+
+    const lib_path_raw = b.run(&[_][]const u8{ llvm_config, "--libdir" });
+    const lib_path = std.mem.trimRight(u8, lib_path_raw, "\t\r\n");
+    module.addLibraryPath(.{ .cwd_relative = lib_path });
+
+    const libs = b.run(&[_][]const u8{ llvm_config, "--libs" });
+    var it = std.mem.splitScalar(u8, libs, ' ');
+    while (it.next()) |lib_raw| {
+        var lib = std.mem.trim(u8, lib_raw, " \t\r\n");
+        if (lib.len <= 2) {
+            continue;
+        }
+        lib = lib[2..];
+        module.linkSystemLibrary(lib, .{});
+    }
+
+    return module;
+}
+
+pub fn build(b: *std.Build) !void {
+    const module = try makeModule(b);
+
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_module = module,
+    });
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
@@ -43,9 +71,7 @@ pub fn build(b: *std.Build) void {
 
     // Tests for main
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = module,
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);

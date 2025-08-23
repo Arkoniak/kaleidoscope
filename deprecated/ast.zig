@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const String = []const u8;
 
-const llvm = @cImport({
+pub const llvm = @cImport({
     @cInclude("llvm-c/Core.h");
     @cInclude("llvm-c/Target.h");
     @cInclude("llvm-c/Types.h");
